@@ -6,10 +6,12 @@ class RotaryPositionalEmbedding(torch.nn.Module):
     Implements RoPE (Su et al., 2021).
     Rotates Q/K vectors in 2D slices of size 2.
 
-    Shapes:
-      - cos, sin: (1, max_seq_len, 1, d_k/2)
-      - x (input): (B, S, H, D)
-      - output:    (B, S, H, D)
+    Inputs:
+        x:              (..., seq_len, d_k)
+        token_positions:(..., seq_len)
+
+    Returns:
+        x_rotated:      (..., seq_len, d_k)
     """
 
     def __init__(self, theta: float, d_k: int, max_seq_len: int):
@@ -56,40 +58,33 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 
         # final shape expected by forward():
         #   (1, S, 1, D/2) to broadcast over (B,S,H,D/2)
-        cos = einops.rearrange(cos, "p j -> 1 p 1 j")
-        sin = einops.rearrange(sin, "p j -> 1 p 1 j")
+        # cos = einops.rearrange(cos, "p j -> 1 p 1 j")
+        # sin = einops.rearrange(sin, "p j -> 1 p 1 j")
 
         return cos, sin
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor):
         """
-        x: (B, S, H, D)
-        Returns rotated x: (B, S, H, D)
+        x: (..., seq_len, d_k)
+        Returns rotated x: (..., seq_len)
         """
-
-        B, S, H, D = x.shape
-        assert S == self.max_seq_len, "sequence length mismatch"
-        assert D == self.d_k, "head dim mismatch"
         assert x.device == self.cos.device, "device mismatch"
-
-        # Select even/odd indices for 2D rotation
-        idx = torch.arange(0, D, device=x.device)
-        even_mask = (idx % 2) == 0
-        odd_mask  = ~even_mask
-
+    
         # shapes: (B,S,H,D/2)
-        x_even = x[..., even_mask]
-        x_odd  = x[..., odd_mask]
+        x_even = x[..., 0::2] # starting from 0 and take 2 steps
+        x_odd  = x[..., 1::2] # starting from 1 and take 2 steps
+
+        cos, sin = self.cos[token_positions], self.sin[token_positions]
 
         # 2D rotation:
         # [xe]   [ cos  -sin ] [xe]
         # [xo] = [ sin   cos ] [xo]
-        x_even_rot = self.cos * x_even - self.sin * x_odd
-        x_odd_rot  = self.cos * x_odd  + self.sin * x_even
+        x_even_rot = cos * x_even - sin * x_odd
+        x_odd_rot  = cos * x_odd  + sin * x_even
 
         # Reconstruct interleaved (B,S,H,D)
         x_rot = torch.empty_like(x)
-        x_rot[..., even_mask] = x_even_rot
-        x_rot[..., odd_mask]  = x_odd_rot
+        x_rot[..., 0::2] = x_even_rot
+        x_rot[..., 1::2]  = x_odd_rot
 
         return x_rot.to(x.dtype)
