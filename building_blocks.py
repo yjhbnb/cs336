@@ -225,10 +225,10 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 
 
 class SwiGLUFFN(torch.nn.Module):
-    def __init__(self, d_model):
+    def __init__(self, d_model, d_ff):
         super().__init__()
         self.d_model = d_model
-        self.d_ff = self.d_model * 8 // 3
+        # self.d_ff = self.d_model * 8 // 3
 
         self.w1   = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
         self.w3 = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
@@ -305,7 +305,7 @@ def scaled_dot_product_attention(
     return out.to(Q.dtype)
 
 
-class MultiHeadSelfAttention(nn.Module):
+class MultiHeadSelfAttention(torch.nn.Module):
     def __init__(self, d_model: int, num_heads: int, theta: float, max_seq_len: int):
         super().__init__()
         self.d_model = d_model
@@ -327,7 +327,7 @@ class MultiHeadSelfAttention(nn.Module):
                                               d_k=self.d_k,
                                               max_seq_len=self.max_seq_len)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor = None) -> torch.Tensor:
         """
         x: (B, S, d_model)
         token_positions (optional): (..., S) absolute positions. If None, use 0..S-1.
