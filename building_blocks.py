@@ -228,6 +228,7 @@ class SwiGLUFFN(torch.nn.Module):
     def __init__(self, d_model, d_ff):
         super().__init__()
         self.d_model = d_model
+        self.d_ff = d_ff
         # self.d_ff = self.d_model * 8 // 3
 
         self.w1   = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
