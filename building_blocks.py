@@ -109,7 +109,7 @@ class Embedding(torch.nn.Module):
 
 class RMSNorm(torch.nn.Module):
     """
-    RMSNorm: x / RMS(x) * g
+    RMSNorm: x / RMS(x) * weight
     RMS(x) = sqrt(mean(x^2) + eps)
     """
 
@@ -117,7 +117,7 @@ class RMSNorm(torch.nn.Module):
         super().__init__()
         self.d_model = d_model
         self.eps = eps
-        self.g = torch.nn.Parameter(torch.ones(d_model))  # IMPORTANT: initialize to 1
+        self.weight = torch.nn.Parameter(torch.ones(d_model))  # IMPORTANT: initialize to 1
 
     def forward(self, x):
         assert x.shape[-1] == self.d_model, "shape mismatch"
@@ -129,7 +129,7 @@ class RMSNorm(torch.nn.Module):
             einops.reduce(x * x, "... d -> ... 1", reduction="mean") + self.eps
         )
 
-        out = (x / rms) * self.g  # broadcasts (..., d_model)
+        out = (x / rms) * self.weight  # broadcasts (..., d_model)
         return out.to(dtype_in)
 
 class RotaryPositionalEmbedding(torch.nn.Module):
@@ -230,18 +230,18 @@ class SwiGLUFFN(torch.nn.Module):
         self.d_model = d_model
         self.d_ff = self.d_model * 8 // 3
 
-        self.silu_linear   = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
-        self.gate_linear = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
-        self.final_linear  = Linear(in_features=self.d_ff, out_features=self.d_model, bias=False)
+        self.w1   = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
+        self.w3 = Linear(in_features=self.d_model, out_features=self.d_ff, bias=False)
+        self.w2  = Linear(in_features=self.d_ff, out_features=self.d_model, bias=False)
 
     def forward(self, x):
         assert x.shape[-1] == self.d_model, "shape mismatched"
 
-        silu_ffn_x = self.silu_linear(x)                # (..., d_ff)
+        silu_ffn_x = self.w1(x)                # (..., d_ff)
         silu_x     = silu_ffn_x * torch.sigmoid(silu_ffn_x)  # SiLU(...), (..., d_ff)
 
-        normal_x   = silu_x * self.gate_linear(x)     # gate ⊙ W3 x, (..., d_ff)
-        out        = self.final_linear(normal_x)        # (..., d_model)
+        normal_x   = silu_x * self.w3(x)     # gate ⊙ W3 x, (..., d_ff)
+        out        = self.w2(normal_x)        # (..., d_model)
 
         return out.to(x.dtype)
 
@@ -314,12 +314,12 @@ class MultiHeadSelfAttention(nn.Module):
         self.d_v = self.d_k
 
         # project into Q, K, V for all heads at once: (B, S, d_model) -> (B, S, h * d_k)
-        self.WQ = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_k)
-        self.WK = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_k)
-        self.WV = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_v)
+        self.q_proj = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_k)
+        self.k_proj = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_k)
+        self.v_proj = Linear(in_features=self.d_model, out_features=self.num_heads * self.d_v)
 
         # output projection: (B, S, h * d_v) -> (B, S, d_model)
-        self.WO = Linear(in_features=self.num_heads * self.d_v, out_features=self.d_model)
+        self.output_proj = Linear(in_features=self.num_heads * self.d_v, out_features=self.d_model)
 
         self.theta = theta
         self.max_seq_len = max_seq_len
@@ -340,9 +340,9 @@ class MultiHeadSelfAttention(nn.Module):
             token_positions = einops.rearrange(torch.arange(S, device=x.device), "s -> 1 s")
 
         # 1) Linear projections
-        Q = self.WQ(x)  # (B, S, h * d_k)
-        K = self.WK(x)  # (B, S, h * d_k)
-        V = self.WV(x)  # (B, S, h * d_v)
+        Q = self.q_proj(x)  # (B, S, h * d_k)
+        K = self.k_proj(x)  # (B, S, h * d_k)
+        V = self.v_proj(x)  # (B, S, h * d_v)
 
         # 2) Reshape to heads: (B, S, h * d) -> (B, h, S, d)
         Q = einops.rearrange(Q, "b s (h d) -> b h s d", h=self.num_heads)
@@ -363,6 +363,6 @@ class MultiHeadSelfAttention(nn.Module):
         att = einops.rearrange(att, "b h s d -> b s (h d)", h=self.num_heads)
 
         # 7) Final linear projection
-        out = self.WO(att)  # (B, S, d_model)
+        out = self.output_proj(att)  # (B, S, d_model)
 
         return out.to(x.dtype)
