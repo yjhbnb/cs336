@@ -424,3 +424,13 @@ class AdamW(torch.optim.Optimizer):
                 state["m"] = m 
                 state["v"] = v
         return loss
+
+def learning_rate_schedule(t, alpha_min, alpha_max, T_w, T_c):
+    import numpy as np
+    if t < T_w:
+        alpha_t = t * alpha_max / T_w
+    elif t >= T_w and t <= T_c:
+        alpha_t = alpha_min + 0.5 * np.cos((t - T_w) * np.pi / (T_c - T_w)) * (alpha_max - alpha_min)
+    else:
+        alpha_t = alpha_min
+    return alpha_t
