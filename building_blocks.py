@@ -265,7 +265,7 @@ def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Ten
     offset = torch.max(logits, dim=-1, keepdim=True)[0] # 0 for values and 1 for indices
     shifted_logits = logits - offset
     batch_size = logits.shape[0]
-    target_logits = shifted_logits[torch.arange(batch_size), targets]
+    target_logits = shifted_logits[torch.arange(batch_size), targets] # need two indices to get the target logit. for example batch 0's target logit is shifted_logits[0, targets[0]]
     log_sum_exp = torch.log(torch.sum(torch.exp(shifted_logits), dim=-1))
     loss = -target_logits + log_sum_exp
     return loss.mean()
