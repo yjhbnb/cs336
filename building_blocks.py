@@ -380,50 +380,100 @@ class MultiHeadSelfAttention(torch.nn.Module):
 
 
 class AdamW(torch.optim.Optimizer):
-    def __init__(self, params, alpha=1e-3, beta1=0.9, beta2=0.95 eps=1e-8, lbd=0.01):
-        defaults = {"alpha": alpha, 
-                    "beta1": beta1, 
-                    "beta2": beta2,
-                    "eps", eps, 
-                    "lambda": lbd}
-        super().__init__(params, defaults)
-    
-    def step(self, closure = None):
-        loss = None if closure is None else closure()
-        for group in self.param_groups:
+    """
+    AdamW optimizer (single-parameter-group version).
 
+    Notation vs paper / handout:
+      - theta (θ)      -> parameter tensor `p`
+      - alpha (α)      -> base learning rate `alpha`
+      - alpha_t (α_t)  -> bias-corrected learning rate `alpha_t`
+      - beta1 (β₁)     -> `beta1`
+      - beta2 (β₂)     -> `beta2`
+      - m_t            -> first moment (exp. moving avg of g), `m`
+      - v_t            -> second moment (exp. moving avg of g²), `v`
+      - lambda (λ)     -> weight decay `lbd`
+      - eps (ε)        -> numerical stability term `eps`
+      - t              -> step counter per parameter, `state["t"]`
+    """
+
+    def __init__(
+        self,
+        params,
+        alpha: float = 1e-3,   # α_max in the handout (base LR)
+        beta1: float = 0.9,    # β₁
+        beta2: float = 0.95,   # β₂
+        eps: float = 1e-8,     # ε
+        lbd: float = 0.01,     # λ (weight decay)
+        max_norm: float | None = None,  # global grad clip ‖g‖₂ ≤ max_norm
+    ):
+        # Hyperparameters stored in param_groups (not in state)
+        defaults = {
+            "alpha": alpha,
+            "beta1": beta1,
+            "beta2": beta2,
+            "eps": eps,
+            "lambda": lbd,
+        }
+        super().__init__(params, defaults)
+        self.max_norm = max_norm
+
+    def step(self, closure=None):
+        # Optional closure to recompute loss if needed (standard Optimizer API)
+        loss = None if closure is None else closure()
+
+        for group in self.param_groups:
             alpha = group["alpha"]
             beta1 = group["beta1"]
             beta2 = group["beta2"]
             eps = group["eps"]
             lbd = group["lambda"]
 
-            for p in group["params"]: 
+            # 1) Global gradient clipping (if enabled): scales all p.grad
+            if self.max_norm is not None:
+                gradient_clipping(group["params"], max_norm=self.max_norm)
+
+            # 2) AdamW update per parameter
+            for p in group["params"]:
                 if p.grad is None:
                     continue
-                
+
                 state = self.state[p]
-                t = state.get("t", 1)
-                if t == 1:
-                    m = torch.zeros_like(p)
-                    v = torch.zeros_like(p)
-                else:
-                    m = state["m"]
-                    v = state["v"]
 
-                grad = p.grad
-                m = beta1 * m + (1 - beta1) * grad
-                v = beta2 * v + (1 - beta2) * (grad.square())
-                alpha_t = alpha * ((1 - beta2**t)**(0.5)) / (1 - beta1**t)
+                # Lazy state initialization
+                if len(state) == 0:
+                    state["t"] = 1                        # t = 1 (as in handout)
+                    state["m"] = torch.zeros_like(p)      # m₀ = 0
+                    state["v"] = torch.zeros_like(p)      # v₀ = 0
 
+                t = state["t"]       # current step t
+                m = state["m"]       # m_{t-1}
+                v = state["v"]       # v_{t-1}
+
+                grad = p.grad        # g_t = ∇_θ ℓ(θ; B_t)
+
+                # m_t = β₁ m_{t-1} + (1 - β₁) g_t
+                m = beta1 * m + (1.0 - beta1) * grad
+
+                # v_t = β₂ v_{t-1} + (1 - β₂) g_t²
+                v = beta2 * v + (1.0 - beta2) * grad.square()
+
+                # Bias-corrected learning rate:
+                # α_t = α * sqrt(1 - β₂^t) / (1 - β₁^t)
+                alpha_t = alpha * ((1.0 - beta2**t) ** 0.5) / (1.0 - beta1**t)
+
+                # θ_t = θ_{t-1} - α_t * m_t / sqrt(v_t + ε)
+                # θ_t = θ_t      - α * λ * θ_t      (decoupled weight decay)
                 with torch.no_grad():
                     p -= alpha_t * m / (v + eps).sqrt()
                     p -= alpha * lbd * p
 
+                # Increment step and store updated moments
                 state["t"] = t + 1
-                state["m"] = m 
+                state["m"] = m
                 state["v"] = v
+
         return loss
+
 
 def learning_rate_schedule(t, alpha_min, alpha_max, T_w, T_c):
     import numpy as np
