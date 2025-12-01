@@ -411,7 +411,7 @@ class AdamW(torch.optim.Optimizer):
                     m = state["m"]
                     v = state["v"]
 
-                grad = p.grad.data
+                grad = p.grad
                 m = beta1 * m + (1 - beta1) * grad
                 v = beta2 * v + (1 - beta2) * (grad.square())
                 alpha_t = alpha * ((1 - beta2**t)**(0.5)) / (1 - beta1**t)
@@ -430,7 +430,25 @@ def learning_rate_schedule(t, alpha_min, alpha_max, T_w, T_c):
     if t < T_w:
         alpha_t = t * alpha_max / T_w
     elif t >= T_w and t <= T_c:
-        alpha_t = alpha_min + 0.5 * np.cos((t - T_w) * np.pi / (T_c - T_w)) * (alpha_max - alpha_min)
+        alpha_t = alpha_min + 0.5 * (1 + np.cos((t - T_w) * np.pi / (T_c - T_w))) * (alpha_max - alpha_min)
     else:
         alpha_t = alpha_min
     return alpha_t
+
+
+def gradient_clipping(params, max_norm, eps=1e-6):
+    # 1. Compute global L2 norm
+    total_norm = 0.0
+    for p in params:
+        if p.grad is not None:
+            total_norm += p.grad.pow(2).sum()
+    total_norm = total_norm.sqrt()
+
+    # 2. Compute scale factor
+    if total_norm > max_norm:
+        scale = max_norm / (total_norm + eps)
+
+        # 3. Scale gradients in place
+        for p in params:
+            if p.grad is not None:
+                p.grad.mul_(scale)   # in-place gradient modification
