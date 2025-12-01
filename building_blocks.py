@@ -377,3 +377,50 @@ class MultiHeadSelfAttention(torch.nn.Module):
         out = self.output_proj(att)  # (B, S, d_model)
 
         return out.to(x.dtype)
+
+
+class AdamW(torch.optim.Optimizer):
+    def __init__(self, params, alpha=1e-3, beta1=0.9, beta2=0.95 eps=1e-8, lbd=0.01):
+        defaults = {"alpha": alpha, 
+                    "beta1": beta1, 
+                    "beta2": beta2,
+                    "eps", eps, 
+                    "lambda": lbd}
+        super().__init__(params, defaults)
+    
+    def step(self, closure = None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+
+            alpha = group["alpha"]
+            beta1 = group["beta1"]
+            beta2 = group["beta2"]
+            eps = group["eps"]
+            lbd = group["lambda"]
+
+            for p in group["params"]: 
+                if p.grad is None:
+                    continue
+                
+                state = self.state[p]
+                t = state.get("t", 1)
+                if t == 1:
+                    m = torch.zeros_like(p)
+                    v = torch.zeros_like(p)
+                else:
+                    m = state["m"]
+                    v = state["v"]
+
+                grad = p.grad.data
+                m = beta1 * m + (1 - beta1) * grad
+                v = beta2 * v + (1 - beta2) * (grad.square())
+                alpha_t = alpha * ((1 - beta2**t)**(0.5)) / (1 - beta1**t)
+
+                with torch.no_grad():
+                    p -= alpha_t * m / (v + eps).sqrt()
+                    p -= alpha * lbd * p
+
+                state["t"] = t + 1
+                state["m"] = m 
+                state["v"] = v
+        return loss
